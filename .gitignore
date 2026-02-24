@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+temp_*
+audio_*
+models.json
+config.json
+models.txt

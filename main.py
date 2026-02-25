@@ -181,6 +181,36 @@ async def process_video(file: UploadFile = File(...)):
         
         summary_speakers_hi = chat_completion_speakers_hi.choices[0].message.content.replace("*", "").replace("#", "")
 
+        # 4e. Advanced Meeting Intelligence (Hackathon Special)
+        prompt_intelligence = f"""Analyze this meeting transcript and return a structured JSON object with exactly these three keys:
+1. "missed_signals": A list of strings. Identify: Unanswered questions, Repeated concerns not resolved, Vague commitments (e.g., "we'll see", "soon"), Conflicts or disagreements without resolution, Decisions without clear ownership.
+2. "health": An object with "score" (number from 1.0 to 10.0), "strengths" (list of strings), and "weaknesses" (list of strings).
+3. "action_items": A list of objects. Extract: "task" (Task description), "owner" (if mentioned, else null), "deadline" (if mentioned, else null), "risk_level" (Low/Medium/High), and "risk_reason" (Why risk was assigned).
+
+Return ONLY valid JSON. Do not use markdown blocks like `json`.
+
+Transcript:
+{full_text}
+"""
+        try:
+            chat_completion_intel = groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are a meeting intelligence JSON generator. Exclusively output valid JSON without formatting."},
+                    {"role": "user", "content": prompt_intelligence}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.2
+            )
+            intel_raw = chat_completion_intel.choices[0].message.content
+            json_match = re.search(r'\{.*\}', intel_raw, re.DOTALL)
+            if json_match:
+                meeting_intelligence = json.loads(json_match.group())
+            else:
+                meeting_intelligence = json.loads(intel_raw)
+        except Exception as e:
+            print(f"Failed to extract intelligence: {e}")
+            meeting_intelligence = None
+
         chapters_list = []
         if getattr(transcript, 'chapters', None):
             for chapter in transcript.chapters:
@@ -202,7 +232,8 @@ async def process_video(file: UploadFile = File(...)):
             "summary": summary,
             "summary_hi": summary_hi,
             "summary_speakers": summary_speakers,
-            "summary_speakers_hi": summary_speakers_hi
+            "summary_speakers_hi": summary_speakers_hi,
+            "meeting_intelligence": meeting_intelligence
         }
 
     except Exception as e:

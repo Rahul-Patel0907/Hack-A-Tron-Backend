@@ -211,6 +211,57 @@ Transcript:
             print(f"Failed to extract intelligence: {e}")
             meeting_intelligence = None
 
+        if meeting_intelligence is not None:
+            # Compute Speaker Analytics
+            speaker_stats = {}
+            total_spoken_time = 0
+            interruptions = []
+            previous_end = 0
+            previous_speaker = None
+            
+            for item in speaker_wise_transcript:
+                spk = item["speaker"]
+                start_ms = item["start"]
+                end_ms = item["end"]
+                duration = end_ms - start_ms
+                
+                if spk not in speaker_stats:
+                    speaker_stats[spk] = {"total_time": 0, "longest_monologue": 0}
+                
+                speaker_stats[spk]["total_time"] += duration
+                total_spoken_time += duration
+                
+                if duration > speaker_stats[spk]["longest_monologue"]:
+                    speaker_stats[spk]["longest_monologue"] = duration
+                    
+                if previous_speaker and previous_speaker != spk and start_ms < previous_end:
+                    interruptions.append({
+                        "interrupter": spk,
+                        "interrupted": previous_speaker,
+                        "time": start_ms
+                    })
+                    
+                previous_end = max(previous_end, end_ms)
+                previous_speaker = spk
+                
+            speaker_metrics = {
+                "total_spoken_time": total_spoken_time,
+                "speakers": [],
+                "interruptions": len(interruptions)
+            }
+            for spk, stats in speaker_stats.items():
+                pct = round((stats["total_time"] / total_spoken_time) * 100) if total_spoken_time > 0 else 0
+                speaker_metrics["speakers"].append({
+                    "name": spk,
+                    "total_time": stats["total_time"],
+                    "percentage": pct,
+                    "longest_monologue": stats["longest_monologue"]
+                })
+                
+            # Sort speakers by percentage descending
+            speaker_metrics["speakers"] = sorted(speaker_metrics["speakers"], key=lambda x: x["percentage"], reverse=True)
+            meeting_intelligence["speaker_metrics"] = speaker_metrics
+
         chapters_list = []
         if getattr(transcript, 'chapters', None):
             for chapter in transcript.chapters:

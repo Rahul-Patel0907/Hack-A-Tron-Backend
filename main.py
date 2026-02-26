@@ -4,7 +4,7 @@ import json
 import re
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from moviepy import VideoFileClip
+
 import assemblyai as aai
 from groq import Groq
 from dotenv import load_dotenv
@@ -33,21 +33,16 @@ async def process_video(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # 2. Audio Extraction using MoviePy
-        audio_path = f"audio_{file.filename}.mp3"
-        video_clip = VideoFileClip(video_path)
-        video_clip.audio.write_audiofile(audio_path)
-        video_clip.close()
-
-        # 3. Transcription & Diarization using AssemblyAI
+        # 2. Transcription & Diarization using AssemblyAI (Direct Video Processing)
         transcriber = aai.Transcriber()
         
         config = aai.TranscriptionConfig(
             speaker_labels=True,
             auto_chapters=True,
-            speech_models=[aai.SpeechModel.universal]
+            language_detection=True,
+            speech_models=["universal-3-pro", "universal-2"]
         )
-        transcript = transcriber.transcribe(audio_path, config=config)
+        transcript = transcriber.transcribe(video_path, config=config)
 
         if transcript.status == aai.TranscriptStatus.error:
             return {"error": transcript.error}
@@ -273,8 +268,8 @@ Transcript:
                 })
 
         # Cleanup temporary files
-        os.remove(video_path)
-        os.remove(audio_path)
+        if os.path.exists(video_path):
+            os.remove(video_path)
 
         # 5. Return Response
         return {

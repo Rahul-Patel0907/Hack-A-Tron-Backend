@@ -2,14 +2,16 @@ import os
 import shutil
 import json
 import re
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 import assemblyai as aai
-from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from services.ai_service import get_speaker_names, get_summaries, get_meeting_intelligence, generate_chat_response
 
 app = FastAPI()
 
@@ -23,7 +25,6 @@ app.add_middleware(
 )
 
 aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 @app.post("/api/process-video")
 async def process_video(file: UploadFile = File(...)):
@@ -40,7 +41,8 @@ async def process_video(file: UploadFile = File(...)):
             speaker_labels=True,
             auto_chapters=True,
             language_detection=True,
-            speech_models=["universal-3-pro", "universal-2"]
+            speech_models=["universal-3-pro", "universal-2"],
+            word_boost=["Vrize", "VRIZE"]
         )
         transcript = transcriber.transcribe(video_path, config=config)
 
@@ -50,42 +52,19 @@ async def process_video(file: UploadFile = File(...)):
         speaker_wise_transcript = []
         full_text = ""
         for utterance in transcript.utterances:
+            # Hardcoded fix to ensure Vrize is correct
+            corrected_text = utterance.text.replace("Vrise", "Vrize").replace("vrise", "vrize").replace("VRISE", "VRIZE")
+            
             speaker_wise_transcript.append({
                 "speaker": f"Speaker {utterance.speaker}",
-                "text": utterance.text,
+                "text": corrected_text,
                 "start": utterance.start,
                 "end": utterance.end
             })
-            full_text += f"Speaker {utterance.speaker}: {utterance.text}\n"
+            full_text += f"Speaker {utterance.speaker}: {corrected_text}\n"
 
         # 3.5 Identify speaker names using Groq
-        prompt_names = f"Analyze the following transcript and identify the real names of the speakers (e.g., 'Speaker A', 'Speaker B') if they mention them. Return ONLY a valid JSON object mapping the speaker labels to their inferred real names. If a name cannot be inferred, map it to the original label. Do not output any other text or markdown.\n\nTranscript:\n{full_text}"
-        
-        try:
-            name_completion = groq_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a JSON generator. You exclusively output valid JSON mappings of speaker labels to real names."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt_names
-                    }
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.1
-            )
-            name_mapping_str = name_completion.choices[0].message.content
-            # Safely extract json if markdown is present
-            json_match = re.search(r'\{.*\}', name_mapping_str, re.DOTALL)
-            if json_match:
-                name_mapping = json.loads(json_match.group())
-            else:
-                name_mapping = {}
-        except Exception as e:
-            print(f"Failed to extract names: {e}")
-            name_mapping = {}
+        name_mapping = get_speaker_names(full_text)
 
         # Update full_text and speaker_wise_transcript with real names
         if name_mapping:
@@ -101,110 +80,10 @@ async def process_video(file: UploadFile = File(...)):
                 full_text += f"{item['speaker']}: {item['text']}\n"
 
         # 4. Summarization using Groq
-        prompt = f"Please summarize the following meeting transcript:\n\n{full_text}"
-        
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that summarizes meeting transcripts clearly and concisely. Do NOT use markdown. Output plain text only without asterisks or hashes.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            model="llama-3.3-70b-versatile",
-        )
-        
-        summary = chat_completion.choices[0].message.content.replace("*", "").replace("#", "")
-
-        # 4b. Summarization using Groq (Hinglish)
-        prompt_hinglish = f"Please summarize the following meeting transcript in Hinglish (a natural mix of Hindi and English, written in the English alphabet):\n\n{full_text}"
-        
-        chat_completion_hinglish = groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that summarizes meeting transcripts clearly and concisely in Hinglish (Hindi + English). Do NOT use markdown. Output plain text only without asterisks or hashes.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt_hinglish,
-                }
-            ],
-            model="llama-3.3-70b-versatile",
-        )
-        
-        summary_hi = chat_completion_hinglish.choices[0].message.content.replace("*", "").replace("#", "")
-
-        # 4c. Summarization using Groq (Person-wise)
-        prompt_speakers = f"Please provide a summary of the meeting, grouped by each speaker. Highlight their key points, action items, and general contributions. Format the output with clear headings for each speaker.\n\nTranscript:\n{full_text}"
-        
-        chat_completion_speakers = groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that summarizes meeting transcripts by grouping the summary by each individual speaker. Do NOT use markdown. Output plain text only without asterisks or hashes.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt_speakers,
-                }
-            ],
-            model="llama-3.3-70b-versatile",
-        )
-        
-        summary_speakers = chat_completion_speakers.choices[0].message.content.replace("*", "").replace("#", "")
-
-        # 4d. Summarization using Groq (Person-wise, Hinglish)
-        prompt_speakers_hi = f"Please provide a summary of the meeting, grouped by each speaker, in Hinglish (a natural mix of Hindi and English, written in the English alphabet). Highlight their key points, action items, and general contributions. Format the output with clear headings for each speaker.\n\nTranscript:\n{full_text}"
-        
-        chat_completion_speakers_hi = groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that summarizes meeting transcripts by grouping the summary by each individual speaker in Hinglish. Do NOT use markdown. Output plain text only without asterisks or hashes.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt_speakers_hi,
-                }
-            ],
-            model="llama-3.3-70b-versatile",
-        )
-        
-        summary_speakers_hi = chat_completion_speakers_hi.choices[0].message.content.replace("*", "").replace("#", "")
+        summary, summary_hi, summary_speakers, summary_speakers_hi = get_summaries(full_text)
 
         # 4e. Advanced Meeting Intelligence (Hackathon Special)
-        prompt_intelligence = f"""Analyze this meeting transcript and return a structured JSON object with exactly these three keys:
-1. "missed_signals": A list of strings. Identify: Unanswered questions, Repeated concerns not resolved, Vague commitments (e.g., "we'll see", "soon"), Conflicts or disagreements without resolution, Decisions without clear ownership.
-2. "health": An object with "score" (number from 1.0 to 10.0), "strengths" (list of strings), and "weaknesses" (list of strings).
-3. "action_items": A list of objects. Extract: "task" (Task description), "owner" (if mentioned, else null), "deadline" (if mentioned, else null), "risk_level" (Low/Medium/High), and "risk_reason" (Why risk was assigned).
-
-Return ONLY valid JSON. Do not use markdown blocks like `json`.
-
-Transcript:
-{full_text}
-"""
-        try:
-            chat_completion_intel = groq_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are a meeting intelligence JSON generator. Exclusively output valid JSON without formatting."},
-                    {"role": "user", "content": prompt_intelligence}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.2
-            )
-            intel_raw = chat_completion_intel.choices[0].message.content
-            json_match = re.search(r'\{.*\}', intel_raw, re.DOTALL)
-            if json_match:
-                meeting_intelligence = json.loads(json_match.group())
-            else:
-                meeting_intelligence = json.loads(intel_raw)
-        except Exception as e:
-            print(f"Failed to extract intelligence: {e}")
-            meeting_intelligence = None
+        meeting_intelligence = get_meeting_intelligence(full_text)
 
         if meeting_intelligence is not None:
             # Compute Speaker Analytics
@@ -290,3 +169,18 @@ Transcript:
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Hack-a-tron Backend API!"}
+
+class ChatRequest(BaseModel):
+    question: str
+    context: str
+
+@app.post("/api/chat")
+async def chat_with_meeting(request: ChatRequest):
+    try:
+        answer = generate_chat_response(request.question, request.context)
+        if answer is None:
+             return {"error": "Failed to generate response."}
+        return {"answer": answer}
+    except Exception as e:
+        print(f"Chat failed: {e}")
+        return {"error": "Failed to generate response."}

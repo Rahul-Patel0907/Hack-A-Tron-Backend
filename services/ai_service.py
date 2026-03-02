@@ -79,10 +79,11 @@ def get_summaries(full_text: str):
     return summary, summary_hi, summary_speakers, summary_speakers_hi
 
 def get_meeting_intelligence(full_text: str):
-    prompt_intelligence = f"""Analyze this meeting transcript and return a structured JSON object with exactly these three keys:
+    prompt_intelligence = f"""Analyze this meeting transcript and return a structured JSON object with exactly these four keys:
 1. "missed_signals": A list of strings. Identify: Unanswered questions, Repeated concerns not resolved, Vague commitments (e.g., "we'll see", "soon"), Conflicts or disagreements without resolution, Decisions without clear ownership.
 2. "health": An object with "score" (number from 1.0 to 10.0), "strengths" (list of strings), and "weaknesses" (list of strings).
 3. "action_items": A list of objects. Extract: "task" (Task description), "owner" (if mentioned, else null), "deadline" (if mentioned, else null), "risk_level" (Low/Medium/High), and "risk_reason" (Why risk was assigned).
+4. "sentiment": An object with "overall" (One word like Positive/Neutral/Negative/Tense), "reasoning" (1-sentence explanation of the meeting vibe), and "speaker_moods" (A list of objects: {{"name": "speaker name", "mood": "One word mood"}}).
 
 Return ONLY valid JSON. Do not use markdown blocks like `json`.
 
